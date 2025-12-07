@@ -39,6 +39,10 @@ if [ "${IMMICH_ANALYZE_IGNORE_EXISTING:-false}" = "true" ]; then
     args+=("--ignore-existing")
 fi
 
+if [ -n "$IMMICH_ANALYZE_LANG" ]; then
+    args+=("--lang" "$IMMICH_ANALYZE_LANG")
+fi
+
 # Numeric validations
 if [[ "$IMMICH_ANALYZE_MAX_CONCURRENT" =~ ^[0-9]+$ ]]; then
     args+=("--max-concurrent" "$IMMICH_ANALYZE_MAX_CONCURRENT")
