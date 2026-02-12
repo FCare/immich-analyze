@@ -12,9 +12,8 @@ services:
       - /mnt/mnemonic/francois/immich_files:/data:ro
       # Synchronisation de l'heure
       - /etc/localtime:/etc/localtime:ro
-    env_file:
-      # Configuration spécialisée llama.cpp
-      - .env.immich-analyze
+    env_file:      # Configuration spécialisée llama.cpp
+      - .env
     networks:
       # Rejoint le même réseau que vos containers Immich
       - ansible
