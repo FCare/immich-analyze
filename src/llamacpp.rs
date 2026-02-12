@@ -175,7 +175,9 @@ pub async fn analyze_image(
         
         // Add Authorization header if API key is provided
         if let Some(ref api_key) = host_manager.api_key {
-            debug!("Adding Authorization header with API key: {}...", &api_key[..8.min(api_key.len())]);
+            // Safe UTF-8 truncation for API key logging
+            let api_key_preview = api_key.chars().take(8).collect::<String>();
+            debug!("Adding Authorization header with API key: {}...", api_key_preview);
             request = request.header("Authorization", format!("Bearer {}", api_key));
         } else {
             debug!("No API key provided for llamacpp request");
@@ -205,7 +207,9 @@ pub async fn analyze_image(
                             })?;
                     
                     debug!("llamacpp response body length: {} chars", response_text.len());
-                    debug!("llamacpp response body (first 200 chars): {}", &response_text[..200.min(response_text.len())]);
+                    // Safe UTF-8 truncation to avoid panic on char boundaries
+                    let truncated = response_text.chars().take(200).collect::<String>();
+                    debug!("llamacpp response body (first 200 chars): {}", truncated);
                     
                     match serde_json::from_str::<LlamaCppResponse>(&response_text) {
                         Ok(llamacpp_response) => {
