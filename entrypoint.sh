@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Set log level for debugging
+export RUST_LOG="${RUST_LOG:-info}"
+
 # Validate required environment variables
 required_vars=(
     "DB_USERNAME"
