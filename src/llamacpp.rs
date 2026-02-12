@@ -12,7 +12,12 @@ use std::{
 };
 
 #[derive(Deserialize, Debug)]
-pub struct ChatResponse {
+pub struct LlamaCppResponse {
+    pub choices: Vec<Choice>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Choice {
     pub message: Message,
 }
 
@@ -22,16 +27,18 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone)]
-pub struct OllamaHostManager {
+pub struct LlamaCppHostManager {
     pub hosts: Vec<String>,
+    pub api_key: Option<String>,
     unavailable_hosts: Arc<Mutex<HashMap<String, Instant>>>,
     unavailable_duration: Duration,
 }
 
-impl OllamaHostManager {
-    pub fn new(hosts: Vec<String>, unavailable_duration: Duration) -> Self {
+impl LlamaCppHostManager {
+    pub fn new(hosts: Vec<String>, api_key: Option<String>, unavailable_duration: Duration) -> Self {
         Self {
             hosts,
+            api_key,
             unavailable_hosts: Arc::new(Mutex::new(HashMap::new())),
             unavailable_duration,
         }
@@ -61,19 +68,19 @@ impl OllamaHostManager {
         unavailable.insert(host.to_string(), Instant::now());
         println!(
             "{}",
-            rust_i18n::t!("ollama.host_marked_unavailable", host = host)
+            rust_i18n::t!("llamacpp.host_marked_unavailable", host = host)
         );
     }
 }
 
-/// Analyze image using Ollama API with fallback to multiple hosts
+/// Analyze image using llama.cpp server API with fallback to multiple hosts
 pub async fn analyze_image(
     client: &Client,
     image_path: &Path,
     model_name: &str,
     prompt: &str,
     timeout: u64,
-    host_manager: &OllamaHostManager,
+    host_manager: &LlamaCppHostManager,
 ) -> Result<crate::database::ImageAnalysisResult, ImageAnalysisError> {
     let filename = image_path
         .file_name()
@@ -102,17 +109,30 @@ pub async fn analyze_image(
             error: e.to_string(),
         })?;
     let base64_image = STANDARD.encode(&image_data);
+    
+    // llama.cpp server expects OpenAI-compatible format
     let request_body = serde_json::json!({
         "model": model_name,
         "messages": [
             {
                 "role": "user",
-                "content": prompt,
-                "images": [base64_image]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:image/jpeg;base64,{}", base64_image)
+                        }
+                    }
+                ]
             }
         ],
         "stream": false,
     });
+    
     let mut last_error = None;
     // Try each available host until we get a successful response
     for _attempt in 0..host_manager.hosts.len() {
@@ -120,9 +140,19 @@ pub async fn analyze_image(
             Ok(host) => host,
             Err(e) => return Err(e),
         };
-        let ollama_url = format!("{}/api/chat", host.trim_end_matches('/'));
+        
+        // llama.cpp server typically uses /v1/chat/completions endpoint
+        let llamacpp_url = format!("{}/v1/chat/completions", host.trim_end_matches('/'));
+        
+        let mut request = client.post(&llamacpp_url).json(&request_body);
+        
+        // Add Authorization header if API key is provided
+        if let Some(ref api_key) = host_manager.api_key {
+            request = request.header("Authorization", format!("Bearer {}", api_key));
+        }
+        
         match tokio::time::timeout(Duration::from_secs(timeout.saturating_add(1)), async {
-            client.post(&ollama_url).json(&request_body).send().await
+            request.send().await
         })
         .await
         {
@@ -136,34 +166,44 @@ pub async fn analyze_image(
                                 filename: filename.clone(),
                                 error: e.to_string(),
                             })?;
-                    match serde_json::from_str::<ChatResponse>(&response_text) {
-                        Ok(chat_response) => {
-                            let description = chat_response.message.content.trim().to_string();
-                            if description.is_empty() {
+                    match serde_json::from_str::<LlamaCppResponse>(&response_text) {
+                        Ok(llamacpp_response) => {
+                            if let Some(choice) = llamacpp_response.choices.first() {
+                                let description = choice.message.content.trim().to_string();
+                                if description.is_empty() {
+                                    last_error = Some(ImageAnalysisError::EmptyResponse {
+                                        filename: filename.clone(),
+                                    });
+                                } else {
+                                    return Ok(crate::database::ImageAnalysisResult {
+                                        description,
+                                        asset_id,
+                                    });
+                                }
+                            } else {
                                 last_error = Some(ImageAnalysisError::EmptyResponse {
                                     filename: filename.clone(),
-                                });
-                            } else {
-                                return Ok(crate::database::ImageAnalysisResult {
-                                    description,
-                                    asset_id,
                                 });
                             }
                         }
                         Err(parse_error) => {
                             // Fallback parsing attempt
                             if let Ok(json_value) = serde_json::from_str::<Value>(&response_text) {
-                                if let Some(content) = json_value
-                                    .get("message")
-                                    .and_then(|m| m.get("content"))
-                                    .and_then(|c| c.as_str())
-                                {
-                                    let description = content.trim().to_string();
-                                    if !description.is_empty() {
-                                        return Ok(crate::database::ImageAnalysisResult {
-                                            description,
-                                            asset_id,
-                                        });
+                                if let Some(choices) = json_value.get("choices") {
+                                    if let Some(first_choice) = choices.get(0) {
+                                        if let Some(content) = first_choice
+                                            .get("message")
+                                            .and_then(|m| m.get("content"))
+                                            .and_then(|c| c.as_str())
+                                        {
+                                            let description = content.trim().to_string();
+                                            if !description.is_empty() {
+                                                return Ok(crate::database::ImageAnalysisResult {
+                                                    description,
+                                                    asset_id,
+                                                });
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -191,7 +231,7 @@ pub async fn analyze_image(
                 });
             }
             Err(_) => {
-                last_error = Some(ImageAnalysisError::OllamaRequestTimeout);
+                last_error = Some(ImageAnalysisError::LlamaCppRequestTimeout);
             }
         }
         // Mark current host as unavailable

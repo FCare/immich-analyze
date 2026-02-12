@@ -27,8 +27,19 @@ args=(
 )
 
 # Add optional configuration safely
-if [ -n "$IMMICH_ANALYZE_OLLAMA_HOSTS" ]; then
-    args+=("--ollama-hosts" "$IMMICH_ANALYZE_OLLAMA_HOSTS")
+if [ -n "$IMMICH_ANALYZE_INTERFACE" ]; then
+    args+=("--interface" "$IMMICH_ANALYZE_INTERFACE")
+fi
+
+if [ -n "$IMMICH_ANALYZE_HOSTS" ]; then
+    args+=("--hosts" "$IMMICH_ANALYZE_HOSTS")
+elif [ -n "$IMMICH_ANALYZE_OLLAMA_HOSTS" ]; then
+    # Backwards compatibility
+    args+=("--hosts" "$IMMICH_ANALYZE_OLLAMA_HOSTS")
+fi
+
+if [ -n "$IMMICH_ANALYZE_API_KEY" ]; then
+    args+=("--api-key" "$IMMICH_ANALYZE_API_KEY")
 fi
 
 if [ -n "$IMMICH_ANALYZE_MODEL_NAME" ]; then
