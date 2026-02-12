@@ -7,6 +7,7 @@ mod config;
 mod database;
 mod error;
 mod file_processing;
+mod llamacpp;
 mod monitor;
 mod ollama;
 mod progress;
@@ -115,7 +116,9 @@ async fn run_monitor_mode(
         timeout: args.timeout,
         lang: locale.to_string(),
         ignore_existing: args.ignore_existing,
-        ollama_hosts: args.ollama_hosts.clone(),
+        hosts: args.hosts.clone(),
+        interface: args.interface.clone(),
+        api_key: args.api_key.clone(),
         unavailable_duration: args.unavailable_duration,
     };
     monitor_folder(
