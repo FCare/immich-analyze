@@ -813,6 +813,7 @@ dependencies = [
  "base64",
  "clap",
  "futures",
+ "log",
  "notify",
  "once_cell",
  "regex",
