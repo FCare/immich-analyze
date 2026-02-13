@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: immich-analyze-llamacpp
-    restart: unless-stopped
+    restart: on-failure:3
     volumes:
       # Montage des données Immich (lecture seule)
       - /mnt/mnemonic/francois/immich_files:/data:ro
