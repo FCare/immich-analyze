@@ -400,10 +400,13 @@ fn format_error_message(error: &ImageAnalysisError, filename: &str) -> String {
             rust_i18n::t!("error.database_error", error = error).to_string()
         }
         ImageAnalysisError::AllHostsUnavailable => {
-            rust_i18n::t!("error.all_ollama_hosts_unavailable").to_string()
+            rust_i18n::t!("error.all_hosts_unavailable").to_string()
         }
         ImageAnalysisError::OllamaRequestTimeout => {
             rust_i18n::t!("error.ollama_request_timeout").to_string()
+        }
+        ImageAnalysisError::LlamaCppRequestTimeout => {
+            rust_i18n::t!("error.llamacpp_request_timeout").to_string()
         }
         _ => rust_i18n::t!("error.critical_processing_error", filename = filename).to_string(),
     }
@@ -443,7 +446,7 @@ fn print_statistics(
 
 fn print_error_recommendations() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", rust_i18n::t!("main.error_recommendations"));
-    println!("• {}", rust_i18n::t!("recommendation.check_ollama_status"));
+    println!("• {}", rust_i18n::t!("recommendation.check_service_status"));
     println!("• {}", rust_i18n::t!("recommendation.check_file_sizes"));
     println!("• {}", rust_i18n::t!("recommendation.reduce_concurrency"));
     println!("• {}", rust_i18n::t!("recommendation.use_monitor_mode"));
@@ -455,6 +458,6 @@ fn print_error_recommendations() -> Result<(), Box<dyn std::error::Error>> {
         "• {}",
         rust_i18n::t!("recommendation.check_immich_structure")
     );
-    println!("• {}", rust_i18n::t!("recommendation.check_ollama_servers"));
+    println!("• {}", rust_i18n::t!("recommendation.check_ai_servers"));
     Ok(())
 }

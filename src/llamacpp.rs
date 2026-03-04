@@ -192,10 +192,7 @@ pub async fn analyze_image(
 
         // Add Authorization header if API key is provided
         if let Some(ref api_key) = host_manager.api_key {
-            debug!(
-                "Adding Authorization header with API key: {}...",
-                &api_key[..8.min(api_key.len())]
-            );
+            debug!("Adding Authorization header with API key (key present)");
             request = request.header("Authorization", format!("Bearer {}", api_key));
         } else {
             debug!("No API key provided for llamacpp request");
@@ -343,8 +340,6 @@ pub async fn analyze_image(
             "Marking llamacpp host as unavailable due to error: {}",
             host
         );
-        host_manager.mark_host_unavailable(&host).await;
-        // Mark current host as unavailable
         host_manager.mark_host_unavailable(&host).await;
     }
     Err(last_error.unwrap_or(ImageAnalysisError::AllHostsUnavailable))

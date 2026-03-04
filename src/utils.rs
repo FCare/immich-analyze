@@ -153,10 +153,13 @@ pub fn handle_processing_error(error: &ImageAnalysisError, filename: &str) {
             );
         }
         ImageAnalysisError::AllHostsUnavailable => {
-            eprintln!("{}", rust_i18n::t!("error.all_ollama_hosts_unavailable"));
+            eprintln!("{}", rust_i18n::t!("error.all_hosts_unavailable"));
         }
         ImageAnalysisError::OllamaRequestTimeout => {
             eprintln!("{}", rust_i18n::t!("error.ollama_request_timeout"));
+        }
+        ImageAnalysisError::LlamaCppRequestTimeout => {
+            eprintln!("{}", rust_i18n::t!("error.llamacpp_request_timeout"));
         }
         _ => {
             eprintln!(
