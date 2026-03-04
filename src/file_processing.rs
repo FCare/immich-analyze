@@ -50,12 +50,11 @@ pub fn get_immich_preview_files(immich_root: &Path) -> Result<Vec<PathBuf>, Imag
                     let path = entry.path();
                     if path.is_dir() {
                         stack.push(path);
-                    } else if path.is_file() {
-                        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-                            if filename.contains("-preview.") {
-                                preview_files.push(path);
-                            }
-                        }
+                    } else if path.is_file()
+                        && let Some(filename) = path.file_name().and_then(|f| f.to_str())
+                        && filename.contains("-preview.")
+                    {
+                        preview_files.push(path);
                     }
                 }
             }
@@ -163,7 +162,15 @@ async fn process_file(
                         hosts.to_vec(),
                         std::time::Duration::from_secs(unavailable_duration),
                     );
-                    ollama_analyze_image(http_client, path, model_name, prompt, timeout, &host_manager).await?
+                    ollama_analyze_image(
+                        http_client,
+                        path,
+                        model_name,
+                        prompt,
+                        timeout,
+                        &host_manager,
+                    )
+                    .await?
                 }
                 Interface::Llamacpp => {
                     let host_manager = LlamaCppHostManager::new(
@@ -171,7 +178,15 @@ async fn process_file(
                         api_key.clone(),
                         std::time::Duration::from_secs(unavailable_duration),
                     );
-                    llamacpp_analyze_image(http_client, path, model_name, prompt, timeout, &host_manager).await?
+                    llamacpp_analyze_image(
+                        http_client,
+                        path,
+                        model_name,
+                        prompt,
+                        timeout,
+                        &host_manager,
+                    )
+                    .await?
                 }
             };
             update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)

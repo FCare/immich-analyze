@@ -119,15 +119,19 @@ pub async fn process_new_file(
             .await
         }
     };
-    
+
     match result {
         Ok(analysis) => {
             println!(
                 "{}",
                 rust_i18n::t!("monitor.processing_success", filename = filename)
             );
-            crate::database::update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
-                .await?;
+            crate::database::update_or_create_asset_description(
+                pg_client,
+                analysis.asset_id,
+                &analysis.description,
+            )
+            .await?;
             println!(
                 "{}",
                 rust_i18n::t!("monitor.database_updated", filename = filename)
@@ -226,26 +230,25 @@ pub async fn monitor_folder(
                 while let Ok(event) = event_rx.try_recv() {
                     match event {
                         Ok(event) => {
-                            if let EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) = event.kind {
-                                if let Some(path) = event.paths.first() {
+                            if let EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) = event.kind
+                                && let Some(path) = event.paths.first() {
                                     let path = path.as_path();
-                                    if path.is_file() {
-                                        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                                    if path.is_file()
+                                        && let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                                             let filename = filename.to_string();
                                             if !filename.contains("-preview.") {
                                                 continue;
                                             }
                                             let now = Instant::now();
                                             let cooldown_duration = Duration::from_secs(config.event_cooldown);
-                                            if let Some(last_time) = last_events.get(&filename) {
-                                                if now.duration_since(*last_time) < cooldown_duration {
+                                            if let Some(last_time) = last_events.get(&filename)
+                                                && now.duration_since(*last_time) < cooldown_duration {
                                                     println!("{}", rust_i18n::t!("monitor.skipping_duplicate_event",
                                                         filename = filename,
                                                         cooldown = config.event_cooldown.to_string()
                                                     ));
                                                     continue;
                                                 }
-                                            }
                                             last_events.insert(filename.clone(), now);
                                             {
                                                 let files = processing_files.lock().expect("Failed to lock processing files");
@@ -299,9 +302,7 @@ pub async fn monitor_folder(
                                                 }
                                             });
                                         }
-                                    }
                                 }
-                            }
                         }
                         Err(e) => {
                             eprintln!("{}", rust_i18n::t!("error.filesystem_monitoring_error_details", error = e.to_string()));
