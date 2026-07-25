@@ -10,6 +10,7 @@ mod file_processing;
 mod llamacpp;
 mod monitor;
 mod ollama;
+mod people;
 mod progress;
 mod utils;
 
@@ -54,6 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rust_i18n::t!("main.postgres_connected", url = args.postgres_url)
     );
     if let Err(e) = database::check_database_connection(&pg_client_arc).await {
+        eprintln!(
+            "{}",
+            rust_i18n::t!("error.database_connection_failed", error = e.to_string())
+        );
+        std::process::exit(1);
+    }
+    if let Err(e) = people::ensure_schema(&pg_client_arc).await {
         eprintln!(
             "{}",
             rust_i18n::t!("error.database_connection_failed", error = e.to_string())
@@ -192,5 +200,14 @@ async fn run_batch_mode(
     )
     .await;
     file_processing::display_results(&results, args.max_concurrent > 1)?;
+
+    match people::recompute_profiles(pg_client).await {
+        Ok(count) => println!("{}", rust_i18n::t!("main.profiles_recomputed", count = count.to_string())),
+        Err(e) => eprintln!("{}", rust_i18n::t!("error.profiles_recompute_failed", error = e.to_string())),
+    }
+    match people::recompute_relations(pg_client).await {
+        Ok(count) => println!("{}", rust_i18n::t!("main.relations_recomputed", count = count.to_string())),
+        Err(e) => eprintln!("{}", rust_i18n::t!("error.relations_recompute_failed", error = e.to_string())),
+    }
     Ok(())
 }

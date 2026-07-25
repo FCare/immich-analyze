@@ -100,6 +100,7 @@ pub async fn analyze_image(
     prompt: &str,
     timeout: u64,
     host_manager: &LlamaCppHostManager,
+    persons: &[crate::people::PersonInfo],
 ) -> Result<crate::database::ImageAnalysisResult, ImageAnalysisError> {
     let filename = image_path
         .file_name()
@@ -215,7 +216,9 @@ pub async fn analyze_image(
                         Ok(llamacpp_response) => {
                             debug!("Successfully parsed llamacpp response with {} choices", llamacpp_response.choices.len());
                             if let Some(choice) = llamacpp_response.choices.first() {
-                                let description = choice.message.content.trim().to_string();
+                                let raw_content = choice.message.content.trim();
+                                let (description, face_observations) =
+                                    crate::people::parse_response(raw_content, persons);
                                 if description.is_empty() {
                                     warn!("llamacpp returned empty content for image: {}", filename);
                                     last_error = Some(ImageAnalysisError::EmptyResponse {
@@ -226,6 +229,7 @@ pub async fn analyze_image(
                                     return Ok(crate::database::ImageAnalysisResult {
                                         description,
                                         asset_id,
+                                        face_observations,
                                     });
                                 }
                             } else {
@@ -249,12 +253,14 @@ pub async fn analyze_image(
                                             .and_then(|m| m.get("content"))
                                             .and_then(|c| c.as_str())
                                         {
-                                            let description = content.trim().to_string();
+                                            let (description, face_observations) =
+                                                crate::people::parse_response(content.trim(), persons);
                                             if !description.is_empty() {
                                                 info!("llamacpp analysis successful via fallback parsing for {}, description length: {}", filename, description.len());
                                                 return Ok(crate::database::ImageAnalysisResult {
                                                     description,
                                                     asset_id,
+                                                    face_observations,
                                                 });
                                             }
                                         }

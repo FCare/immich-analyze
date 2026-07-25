@@ -165,7 +165,7 @@ async fn process_file(
                         hosts.to_vec(),
                         std::time::Duration::from_secs(unavailable_duration),
                     );
-                    ollama_analyze_image(http_client, path, model_name, &contextual_prompt, timeout, &host_manager).await?
+                    ollama_analyze_image(http_client, path, model_name, &contextual_prompt, timeout, &host_manager, &context.persons).await?
                 }
                 Interface::Llamacpp => {
                     let host_manager = LlamaCppHostManager::new(
@@ -173,11 +173,18 @@ async fn process_file(
                         api_key.clone(),
                         std::time::Duration::from_secs(unavailable_duration),
                     );
-                    llamacpp_analyze_image(http_client, path, model_name, &contextual_prompt, timeout, &host_manager).await?
+                    llamacpp_analyze_image(http_client, path, model_name, &contextual_prompt, timeout, &host_manager, &context.persons).await?
                 }
             };
             update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
                 .await?;
+            crate::people::record_observations(
+                pg_client,
+                analysis.asset_id,
+                context.photo_year,
+                &analysis.face_observations,
+            )
+            .await;
             Ok(analysis)
         }
         Err(e) => Err(e),

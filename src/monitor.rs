@@ -101,6 +101,7 @@ pub async fn process_new_file(
                 &contextual_prompt,
                 config.request_timeout,
                 &host_manager,
+                &context.persons,
             )
             .await
         }
@@ -117,11 +118,12 @@ pub async fn process_new_file(
                 &contextual_prompt,
                 config.request_timeout,
                 &host_manager,
+                &context.persons,
             )
             .await
         }
     };
-    
+
     match result {
         Ok(analysis) => {
             println!(
@@ -130,6 +132,13 @@ pub async fn process_new_file(
             );
             crate::database::update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)
                 .await?;
+            crate::people::record_observations(
+                pg_client,
+                analysis.asset_id,
+                context.photo_year,
+                &analysis.face_observations,
+            )
+            .await;
             println!(
                 "{}",
                 rust_i18n::t!("monitor.database_updated", filename = filename)

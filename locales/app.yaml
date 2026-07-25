@@ -134,6 +134,12 @@ main.batch_mode_completed:
 main.monitor_mode_started_in_background:
   en: " Monitor mode started in background"
   ru: " Режим мониторинга запущен в фоновом режиме"
+main.profiles_recomputed:
+  en: " Recomputed %{count} person profiles"
+  ru: " Пересчитано профилей: %{count}"
+main.relations_recomputed:
+  en: " Recomputed %{count} person relations"
+  ru: " Пересчитано связей: %{count}"
 
 # Progress
 progress.processing:
@@ -282,6 +288,9 @@ database.error_fetching_location:
 database.error_fetching_faces:
   en: " Error fetching recognized faces context: %{error}"
   ru: " Ошибка получения данных о распознанных лицах: %{error}"
+database.error_fetching_relations:
+  en: " Error fetching relations context: %{error}"
+  ru: " Ошибка получения данных о связях: %{error}"
 
 # Ollama messages
 ollama.host_marked_unavailable:
@@ -397,3 +406,9 @@ error.ollama_request_timeout:
 error.ollama_host_marked_unavailable:
   en: " Ollama host marked as temporarily unavailable: %{host}"
   ru: " Ollama сервер помечен как временно недоступный: %{host}"
+error.profiles_recompute_failed:
+  en: " Failed to recompute person profiles: %{error}"
+  ru: " Не удалось пересчитать профили: %{error}"
+error.relations_recompute_failed:
+  en: " Failed to recompute person relations: %{error}"
+  ru: " Не удалось пересчитать связи: %{error}"

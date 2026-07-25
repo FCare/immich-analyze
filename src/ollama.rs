@@ -74,6 +74,7 @@ pub async fn analyze_image(
     prompt: &str,
     timeout: u64,
     host_manager: &OllamaHostManager,
+    persons: &[crate::people::PersonInfo],
 ) -> Result<crate::database::ImageAnalysisResult, ImageAnalysisError> {
     let filename = image_path
         .file_name()
@@ -138,7 +139,10 @@ pub async fn analyze_image(
                             })?;
                     match serde_json::from_str::<ChatResponse>(&response_text) {
                         Ok(chat_response) => {
-                            let description = chat_response.message.content.trim().to_string();
+                            let (description, face_observations) = crate::people::parse_response(
+                                chat_response.message.content.trim(),
+                                persons,
+                            );
                             if description.is_empty() {
                                 last_error = Some(ImageAnalysisError::EmptyResponse {
                                     filename: filename.clone(),
@@ -147,6 +151,7 @@ pub async fn analyze_image(
                                 return Ok(crate::database::ImageAnalysisResult {
                                     description,
                                     asset_id,
+                                    face_observations,
                                 });
                             }
                         }
@@ -158,11 +163,13 @@ pub async fn analyze_image(
                                     .and_then(|m| m.get("content"))
                                     .and_then(|c| c.as_str())
                                 {
-                                    let description = content.trim().to_string();
+                                    let (description, face_observations) =
+                                        crate::people::parse_response(content.trim(), persons);
                                     if !description.is_empty() {
                                         return Ok(crate::database::ImageAnalysisResult {
                                             description,
                                             asset_id,
+                                            face_observations,
                                         });
                                     }
                                 }
