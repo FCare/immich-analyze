@@ -201,13 +201,140 @@ async fn run_batch_mode(
     .await;
     file_processing::display_results(&results, args.max_concurrent > 1)?;
 
-    match people::recompute_profiles(pg_client).await {
-        Ok(count) => println!("{}", rust_i18n::t!("main.profiles_recomputed", count = count.to_string())),
-        Err(e) => eprintln!("{}", rust_i18n::t!("error.profiles_recompute_failed", error = e.to_string())),
+    let changed_persons = match people::recompute_profiles(pg_client).await {
+        Ok(changed) => {
+            println!(
+                "{}",
+                rust_i18n::t!("main.profiles_recomputed", count = changed.len().to_string())
+            );
+            changed
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                rust_i18n::t!("error.profiles_recompute_failed", error = e.to_string())
+            );
+            Vec::new()
+        }
+    };
+    let changed_relation_pairs = match people::recompute_relations(pg_client).await {
+        Ok(changed) => {
+            println!(
+                "{}",
+                rust_i18n::t!("main.relations_recomputed", count = changed.len().to_string())
+            );
+            changed
+        }
+        Err(e) => {
+            eprintln!(
+                "{}",
+                rust_i18n::t!("error.relations_recompute_failed", error = e.to_string())
+            );
+            Vec::new()
+        }
+    };
+
+    let mut affected_persons: Vec<uuid::Uuid> = changed_persons;
+    for (a, b) in changed_relation_pairs {
+        affected_persons.push(a);
+        affected_persons.push(b);
     }
-    match people::recompute_relations(pg_client).await {
-        Ok(count) => println!("{}", rust_i18n::t!("main.relations_recomputed", count = count.to_string())),
-        Err(e) => eprintln!("{}", rust_i18n::t!("error.relations_recompute_failed", error = e.to_string())),
-    }
+    affected_persons.sort();
+    affected_persons.dedup();
+
+    cascade_reprocess_affected_photos(&http_client, pg_client, immich_root, &affected_persons, args).await;
+
     Ok(())
+}
+
+/// Feedback loop: when a person's estimated age/relations changed materially,
+/// regenerate the description of the already-described photos they appear in, so
+/// the new knowledge gets woven in. Bounded on two sides to avoid a reprocessing
+/// storm: a circuit breaker skips the cascade entirely when too many people
+/// changed at once (a bulk backfill, not incremental refinement), and the number
+/// of photos reprocessed per run is capped.
+const MAX_CHANGED_PERSONS_FOR_CASCADE: usize = 20;
+const MAX_ASSETS_TO_REPROCESS_PER_RUN: i64 = 200;
+
+async fn cascade_reprocess_affected_photos(
+    http_client: &reqwest::Client,
+    pg_client: &Arc<PgClient>,
+    immich_root: &Path,
+    affected_persons: &[uuid::Uuid],
+    args: &Args,
+) {
+    if affected_persons.is_empty() {
+        return;
+    }
+    if affected_persons.len() > MAX_CHANGED_PERSONS_FOR_CASCADE {
+        println!(
+            "{}",
+            rust_i18n::t!(
+                "main.cascade_skipped_bulk_change",
+                count = affected_persons.len().to_string(),
+                threshold = MAX_CHANGED_PERSONS_FOR_CASCADE.to_string()
+            )
+        );
+        return;
+    }
+
+    let asset_ids = match people::find_reprocessable_assets(
+        pg_client,
+        affected_persons,
+        MAX_ASSETS_TO_REPROCESS_PER_RUN,
+    )
+    .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                rust_i18n::t!("error.cascade_lookup_failed", error = e.to_string())
+            );
+            return;
+        }
+    };
+    if asset_ids.is_empty() {
+        return;
+    }
+    println!(
+        "{}",
+        rust_i18n::t!("main.cascade_reprocessing_started", count = asset_ids.len().to_string())
+    );
+    if asset_ids.len() as i64 >= MAX_ASSETS_TO_REPROCESS_PER_RUN {
+        println!(
+            "{}",
+            rust_i18n::t!(
+                "main.cascade_reprocessing_capped",
+                limit = MAX_ASSETS_TO_REPROCESS_PER_RUN.to_string()
+            )
+        );
+    }
+
+    let mut success = 0u32;
+    let mut failed = 0u32;
+    for asset_id in asset_ids {
+        match file_processing::reprocess_asset(http_client, pg_client, immich_root, asset_id, args).await {
+            Ok(_) => success += 1,
+            Err(e) => {
+                failed += 1;
+                eprintln!(
+                    "{}",
+                    rust_i18n::t!(
+                        "error.cascade_reprocess_failed",
+                        asset_id = asset_id.to_string(),
+                        error = e.to_string()
+                    )
+                );
+            }
+        }
+    }
+    println!(
+        "{}",
+        rust_i18n::t!(
+            "main.cascade_reprocessing_complete",
+            success = success.to_string(),
+            failed = failed.to_string()
+        )
+    );
 }

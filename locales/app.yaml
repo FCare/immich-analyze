@@ -140,6 +140,18 @@ main.profiles_recomputed:
 main.relations_recomputed:
   en: " Recomputed %{count} person relations"
   ru: " Пересчитано связей: %{count}"
+main.cascade_skipped_bulk_change:
+  en: " Skipping reprocessing cascade: %{count} people changed at once (threshold %{threshold}), looks like a bulk update"
+  ru: " Пропуск каскада переобработки: изменилось %{count} человек (порог %{threshold}), похоже на массовое обновление"
+main.cascade_reprocessing_started:
+  en: " Reprocessing %{count} photos affected by updated person knowledge"
+  ru: " Переобработка %{count} фото, затронутых обновлением данных о людях"
+main.cascade_reprocessing_capped:
+  en: " Capped at %{limit} photos this run; some affected photos were not reprocessed"
+  ru: " Ограничено %{limit} фото за этот запуск; некоторые фото не были переобработаны"
+main.cascade_reprocessing_complete:
+  en: " Cascade reprocessing complete: %{success} succeeded, %{failed} failed"
+  ru: " Переобработка завершена: успешно %{success}, ошибок %{failed}"
 
 # Progress
 progress.processing:
@@ -412,3 +424,9 @@ error.profiles_recompute_failed:
 error.relations_recompute_failed:
   en: " Failed to recompute person relations: %{error}"
   ru: " Не удалось пересчитать связи: %{error}"
+error.cascade_lookup_failed:
+  en: " Failed to look up photos affected by knowledge-base changes: %{error}"
+  ru: " Не удалось найти затронутые фото: %{error}"
+error.cascade_reprocess_failed:
+  en: " Failed to reprocess asset %{asset_id}: %{error}"
+  ru: " Не удалось переобработать ассет %{asset_id}: %{error}"

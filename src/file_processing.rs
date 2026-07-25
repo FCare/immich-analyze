@@ -15,6 +15,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tokio_postgres::Client as PgClient;
+use uuid::Uuid;
 
 /// Get all preview image files from Immich thumbs directory using std::fs
 pub fn get_immich_preview_files(immich_root: &Path) -> Result<Vec<PathBuf>, ImageAnalysisError> {
@@ -139,7 +140,7 @@ async fn process_file_with_existing_check(
     .await
 }
 
-async fn process_file(
+pub(crate) async fn process_file(
     http_client: &Client,
     pg_client: &PgClient,
     path: &Path,
@@ -451,4 +452,68 @@ fn print_error_recommendations() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("• {}", rust_i18n::t!("recommendation.check_ollama_servers"));
     Ok(())
+}
+
+/// Reconstruct an asset's preview file path from its id (owner folder + first 4 hex
+/// chars fan-out), without walking the whole thumbs tree. Tries both the current
+/// (`_preview.jpeg`) and legacy (`-preview.jpeg`) Immich naming conventions.
+async fn preview_path_for_asset(
+    pg_client: &PgClient,
+    immich_root: &Path,
+    asset_id: Uuid,
+) -> Option<PathBuf> {
+    let asset_id_str = asset_id.to_string();
+    let owner_row = pg_client
+        .query_opt(
+            "SELECT \"ownerId\"::text FROM asset WHERE id::text = $1",
+            &[&asset_id_str],
+        )
+        .await
+        .ok()
+        .flatten()?;
+    let owner_id: String = owner_row.get(0);
+    let (h1, rest) = asset_id_str.split_at(2);
+    let (h2, _) = rest.split_at(2);
+    let base = immich_root.join("thumbs").join(&owner_id).join(h1).join(h2);
+    for filename in [
+        format!("{}_preview.jpeg", asset_id_str),
+        format!("{}-preview.jpeg", asset_id_str),
+    ] {
+        let candidate = base.join(&filename);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Regenerate the description for a specific asset (used by the knowledge-base
+/// feedback loop when a person's estimated age or relations changed enough to
+/// materially affect the description of photos they already appear in).
+pub async fn reprocess_asset(
+    http_client: &Client,
+    pg_client: &PgClient,
+    immich_root: &Path,
+    asset_id: Uuid,
+    args: &crate::args::Args,
+) -> Result<ImageAnalysisResult, ImageAnalysisError> {
+    let path = preview_path_for_asset(pg_client, immich_root, asset_id)
+        .await
+        .ok_or_else(|| ImageAnalysisError::ProcessingError {
+            filename: format!("{}_preview.jpeg", asset_id),
+            error: "preview file not found on disk".to_string(),
+        })?;
+    process_file(
+        http_client,
+        pg_client,
+        &path,
+        &args.model_name,
+        &args.prompt,
+        args.timeout,
+        &args.interface,
+        &args.hosts,
+        &args.api_key,
+        args.unavailable_duration,
+    )
+    .await
 }

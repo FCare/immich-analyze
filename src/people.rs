@@ -167,14 +167,34 @@ pub async fn record_observations(
     }
 }
 
+/// A birth-year estimate changing by at least this many years (or appearing for the
+/// first time) is considered material enough to warrant re-describing that person's
+/// existing photos.
+const MATERIAL_BIRTH_YEAR_CHANGE: i32 = 2;
+
 /// Recompute every person's estimated birth year from all accumulated observations.
 /// Per-photo age guesses from the vision model are noisy (a single mislabeled or
 /// oddly-cropped photo can be off by a decade), so instead of intersecting every
 /// observation's possible-birth-year range (fragile: one outlier makes the whole
 /// range empty/contradictory), we take the *median* birth-year implied by each
 /// observation's midpoint age. The median is robust to outliers and tightens
-/// naturally as more photos accumulate. Returns the number of profiles updated.
-pub async fn recompute_profiles(client: &PgClient) -> Result<u64, ImageAnalysisError> {
+/// naturally as more photos accumulate. Returns the ids of persons whose estimate
+/// changed materially (new estimate, or shifted by MATERIAL_BIRTH_YEAR_CHANGE+ years).
+pub async fn recompute_profiles(client: &PgClient) -> Result<Vec<Uuid>, ImageAnalysisError> {
+    let before_rows = client
+        .query(
+            "SELECT person_id::text, birth_year_estimate FROM analyze_person_profile",
+            &[],
+        )
+        .await
+        .map_err(|e| ImageAnalysisError::DatabaseError {
+            error: e.to_string(),
+        })?;
+    let before: std::collections::HashMap<String, Option<i32>> = before_rows
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, Option<i32>>(1)))
+        .collect();
+
     let query = "
         WITH point_estimates AS (
             SELECT
@@ -209,7 +229,36 @@ pub async fn recompute_profiles(client: &PgClient) -> Result<u64, ImageAnalysisE
         .await
         .map_err(|e| ImageAnalysisError::DatabaseError {
             error: e.to_string(),
-        })
+        })?;
+
+    let after_rows = client
+        .query(
+            "SELECT person_id::text, birth_year_estimate FROM analyze_person_profile",
+            &[],
+        )
+        .await
+        .map_err(|e| ImageAnalysisError::DatabaseError {
+            error: e.to_string(),
+        })?;
+
+    let mut changed = Vec::new();
+    for row in after_rows {
+        let id_str: String = row.get(0);
+        let new_estimate: Option<i32> = row.get(1);
+        let old_estimate = before.get(&id_str).copied().flatten();
+        let materially_changed = match (old_estimate, new_estimate) {
+            (None, Some(_)) => true,
+            (Some(old), Some(new)) => (old - new).abs() >= MATERIAL_BIRTH_YEAR_CHANGE,
+            _ => false,
+        };
+        if materially_changed {
+            if let Ok(id) = id_str.parse::<Uuid>() {
+                changed.push(id);
+            }
+        }
+    }
+    debug!("{} person profiles changed materially", changed.len());
+    Ok(changed)
 }
 
 async fn mid_birth_year(client: &PgClient, person_id: &str) -> Option<i32> {
@@ -222,9 +271,28 @@ const MIN_CO_OCCURRENCE: i64 = 5;
 
 /// Infer probable relations (siblings, parent/child, frequent companions) from how
 /// often pairs of named people co-occur in photos, combined with their estimated
-/// ages. Pure statistics/heuristics, no LLM call. Returns the number of relations
-/// written.
-pub async fn recompute_relations(client: &PgClient) -> Result<u64, ImageAnalysisError> {
+/// ages. Pure statistics/heuristics, no LLM call. Returns the (person_a, person_b)
+/// pairs whose relation is new or changed type since last run.
+pub async fn recompute_relations(client: &PgClient) -> Result<Vec<(Uuid, Uuid)>, ImageAnalysisError> {
+    let before_rows = client
+        .query(
+            "SELECT person_id_a::text, person_id_b::text, relation_type FROM analyze_person_relation",
+            &[],
+        )
+        .await
+        .map_err(|e| ImageAnalysisError::DatabaseError {
+            error: e.to_string(),
+        })?;
+    let before: std::collections::HashMap<(String, String), String> = before_rows
+        .into_iter()
+        .map(|row| {
+            (
+                (row.get::<_, String>(0), row.get::<_, String>(1)),
+                row.get::<_, String>(2),
+            )
+        })
+        .collect();
+
     let co_occurrence_query = "
         SELECT
             LEAST(af1.\"personId\", af2.\"personId\")::text AS person_a,
@@ -247,7 +315,7 @@ pub async fn recompute_relations(client: &PgClient) -> Result<u64, ImageAnalysis
             error: e.to_string(),
         })?;
 
-    let mut updated = 0u64;
+    let mut changed = Vec::new();
 
     for row in rows {
         let person_a: String = row.get(0);
@@ -292,13 +360,60 @@ pub async fn recompute_relations(client: &PgClient) -> Result<u64, ImageAnalysis
             )
             .await
         {
-            Ok(_) => updated += 1,
+            Ok(_) => {
+                let previous = before.get(&(person_a.clone(), person_b.clone()));
+                let is_new_or_changed = match previous {
+                    Some(prev_type) => prev_type != relation_type,
+                    None => true,
+                };
+                if is_new_or_changed {
+                    if let (Ok(id_a), Ok(id_b)) = (person_a.parse::<Uuid>(), person_b.parse::<Uuid>()) {
+                        changed.push((id_a, id_b));
+                    }
+                }
+            }
             Err(e) => warn!(
                 "Failed to upsert relation between {} and {}: {}",
                 person_a, person_b, e
             ),
         }
     }
-    debug!("Recomputed {} person relations", updated);
-    Ok(updated)
+    debug!("{} person relations changed", changed.len());
+    Ok(changed)
+}
+
+/// Find already-described photos featuring any of the given persons, so their
+/// description can be regenerated with the newly learned age/relations context.
+/// Capped at `limit` assets; callers should log if the true count exceeds it so
+/// truncation is never silent.
+pub async fn find_reprocessable_assets(
+    client: &PgClient,
+    person_ids: &[Uuid],
+    limit: i64,
+) -> Result<Vec<Uuid>, ImageAnalysisError> {
+    if person_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids: Vec<String> = person_ids.iter().map(|id| id.to_string()).collect();
+    let query = "
+        SELECT DISTINCT af.\"assetId\"::text
+        FROM asset_face af
+        JOIN asset_exif e ON e.\"assetId\" = af.\"assetId\"
+        WHERE af.\"personId\"::text = ANY($1)
+          AND af.\"deletedAt\" IS NULL
+          AND af.\"isVisible\" = true
+          AND e.description IS NOT NULL
+          AND e.description != ''
+        LIMIT $2
+    ";
+    let rows = client
+        .query(query, &[&ids, &limit])
+        .await
+        .map_err(|e| ImageAnalysisError::DatabaseError {
+            error: e.to_string(),
+        })?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.get::<_, String>(0).parse::<Uuid>().ok())
+        .collect())
 }
