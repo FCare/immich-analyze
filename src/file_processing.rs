@@ -52,7 +52,7 @@ pub fn get_immich_preview_files(immich_root: &Path) -> Result<Vec<PathBuf>, Imag
                         stack.push(path);
                     } else if path.is_file() {
                         if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-                            if filename.contains("-preview.") {
+                            if filename.contains("-preview.") || filename.contains("_preview.") {
                                 preview_files.push(path);
                             }
                         }

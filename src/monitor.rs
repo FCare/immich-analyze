@@ -232,7 +232,7 @@ pub async fn monitor_folder(
                                     if path.is_file() {
                                         if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                                             let filename = filename.to_string();
-                                            if !filename.contains("-preview.") {
+                                            if !filename.contains("-preview.") && !filename.contains("_preview.") {
                                                 continue;
                                             }
                                             let now = Instant::now();
