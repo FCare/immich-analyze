@@ -156,14 +156,16 @@ async fn process_file(
             .and_then(|n| n.to_str())
             .unwrap_or("unknown"),
     ) {
-        Ok(_asset_id) => {
+        Ok(asset_id) => {
+            let context = crate::database::get_asset_context(pg_client, asset_id).await;
+            let contextual_prompt = crate::database::build_contextual_prompt(prompt, &context);
             let analysis = match interface {
                 Interface::Ollama => {
                     let host_manager = OllamaHostManager::new(
                         hosts.to_vec(),
                         std::time::Duration::from_secs(unavailable_duration),
                     );
-                    ollama_analyze_image(http_client, path, model_name, prompt, timeout, &host_manager).await?
+                    ollama_analyze_image(http_client, path, model_name, &contextual_prompt, timeout, &host_manager).await?
                 }
                 Interface::Llamacpp => {
                     let host_manager = LlamaCppHostManager::new(
@@ -171,7 +173,7 @@ async fn process_file(
                         api_key.clone(),
                         std::time::Duration::from_secs(unavailable_duration),
                     );
-                    llamacpp_analyze_image(http_client, path, model_name, prompt, timeout, &host_manager).await?
+                    llamacpp_analyze_image(http_client, path, model_name, &contextual_prompt, timeout, &host_manager).await?
                 }
             };
             update_or_create_asset_description(pg_client, analysis.asset_id, &analysis.description)

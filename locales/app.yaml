@@ -276,6 +276,12 @@ database.insert_error:
 database.connection_success:
   en: " Database connection test passed"
   ru: " Проверка подключения к базе данных пройдена"
+database.error_fetching_location:
+  en: " Error fetching location context: %{error}"
+  ru: " Ошибка получения данных о местоположении: %{error}"
+database.error_fetching_faces:
+  en: " Error fetching recognized faces context: %{error}"
+  ru: " Ошибка получения данных о распознанных лицах: %{error}"
 
 # Ollama messages
 ollama.host_marked_unavailable:

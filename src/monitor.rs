@@ -86,6 +86,8 @@ pub async fn process_new_file(
         );
         return Ok(());
     }
+    let context = crate::database::get_asset_context(pg_client, asset_id).await;
+    let contextual_prompt = crate::database::build_contextual_prompt(prompt, &context);
     let result = match config.interface {
         Interface::Ollama => {
             let host_manager = OllamaHostManager::new(
@@ -96,7 +98,7 @@ pub async fn process_new_file(
                 http_client,
                 image_path,
                 model_name,
-                prompt,
+                &contextual_prompt,
                 config.request_timeout,
                 &host_manager,
             )
@@ -112,7 +114,7 @@ pub async fn process_new_file(
                 http_client,
                 image_path,
                 model_name,
-                prompt,
+                &contextual_prompt,
                 config.request_timeout,
                 &host_manager,
             )

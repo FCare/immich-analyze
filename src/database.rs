@@ -9,6 +9,94 @@ pub struct ImageAnalysisResult {
     pub asset_id: Uuid,
 }
 
+/// Known Immich metadata for an asset (recognized faces, location) that can
+/// be used to enrich the prompt sent to the vision model.
+#[derive(Debug, Default)]
+pub struct AssetContext {
+    pub location: Option<String>,
+    pub person_names: Vec<String>,
+}
+
+/// Fetch recognized face names and location for an asset, to enrich the analysis prompt.
+/// Best-effort: any database error is logged and yields an empty context rather than
+/// failing the whole image analysis.
+pub async fn get_asset_context(client: &PgClient, asset_id: Uuid) -> AssetContext {
+    let asset_id_str = asset_id.to_string();
+
+    let location_query = "
+        SELECT city, state, country
+        FROM asset_exif
+        WHERE \"assetId\"::text = $1
+    ";
+    let location = match client.query_opt(location_query, &[&asset_id_str]).await {
+        Ok(Some(row)) => {
+            let city: Option<String> = row.get(0);
+            let state: Option<String> = row.get(1);
+            let country: Option<String> = row.get(2);
+            let parts: Vec<String> = [city, state, country].into_iter().flatten().collect();
+            if parts.is_empty() { None } else { Some(parts.join(", ")) }
+        }
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                rust_i18n::t!("database.error_fetching_location", error = e.to_string())
+            );
+            None
+        }
+    };
+
+    let faces_query = "
+        SELECT DISTINCT p.name
+        FROM asset_face af
+        JOIN person p ON p.id = af.\"personId\"
+        WHERE af.\"assetId\"::text = $1
+          AND af.\"deletedAt\" IS NULL
+          AND af.\"isVisible\" = true
+          AND p.name != ''
+          AND p.\"isHidden\" = false
+        ORDER BY p.name
+    ";
+    let person_names = match client.query(faces_query, &[&asset_id_str]).await {
+        Ok(rows) => rows.iter().map(|row| row.get::<_, String>(0)).collect(),
+        Err(e) => {
+            eprintln!(
+                "{}",
+                rust_i18n::t!("database.error_fetching_faces", error = e.to_string())
+            );
+            Vec::new()
+        }
+    };
+
+    AssetContext {
+        location,
+        person_names,
+    }
+}
+
+/// Append known faces/location as context to the base prompt so the model can
+/// naturally weave them into the description.
+pub fn build_contextual_prompt(base_prompt: &str, context: &AssetContext) -> String {
+    let mut context_lines = Vec::new();
+    if !context.person_names.is_empty() {
+        context_lines.push(format!(
+            "Personnes reconnues sur cette photo : {}.",
+            context.person_names.join(", ")
+        ));
+    }
+    if let Some(location) = &context.location {
+        context_lines.push(format!("Lieu de la prise de vue : {}.", location));
+    }
+    if context_lines.is_empty() {
+        return base_prompt.to_string();
+    }
+    format!(
+        "{}\n\nContexte connu (issu des métadonnées Immich) à utiliser pour enrichir la description, en mentionnant naturellement les noms et le lieu sans jamais dire qu'il s'agit de métadonnées ou de reconnaissance faciale :\n{}",
+        base_prompt,
+        context_lines.join("\n")
+    )
+}
+
 /// Check if asset already has description in database
 pub async fn asset_has_description(
     client: &PgClient,
