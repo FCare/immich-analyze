@@ -139,7 +139,7 @@ pub async fn analyze_image(
                             })?;
                     match serde_json::from_str::<ChatResponse>(&response_text) {
                         Ok(chat_response) => {
-                            let (description, face_observations) = crate::people::parse_response(
+                            let (description, face_observations, relation_observations) = crate::people::parse_response(
                                 chat_response.message.content.trim(),
                                 persons,
                             );
@@ -152,6 +152,7 @@ pub async fn analyze_image(
                                     description,
                                     asset_id,
                                     face_observations,
+                                    relation_observations,
                                 });
                             }
                         }
@@ -163,13 +164,14 @@ pub async fn analyze_image(
                                     .and_then(|m| m.get("content"))
                                     .and_then(|c| c.as_str())
                                 {
-                                    let (description, face_observations) =
+                                    let (description, face_observations, relation_observations) =
                                         crate::people::parse_response(content.trim(), persons);
                                     if !description.is_empty() {
                                         return Ok(crate::database::ImageAnalysisResult {
                                             description,
                                             asset_id,
                                             face_observations,
+                                            relation_observations,
                                         });
                                     }
                                 }

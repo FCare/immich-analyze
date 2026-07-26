@@ -18,6 +18,14 @@ pub struct Args {
     /// Ignore existing entries in database
     #[arg(short, long)]
     pub ignore_existing: bool,
+    /// Skip image description generation: only recompute person profiles/relations
+    /// and run the reprocessing cascade for affected people
+    #[arg(long)]
+    pub people_only: bool,
+    /// Port for the internal trigger HTTP server (POST /trigger, GET /status),
+    /// active in --combined mode only. Set to 0 to disable it entirely.
+    #[arg(long, default_value_t = 8091)]
+    pub http_trigger_port: u16,
     /// Path to Immich root directory (containing upload/, thumbs/ folders)
     #[arg(long, default_value = "/var/lib/immich")]
     pub immich_root: String,

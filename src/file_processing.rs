@@ -186,6 +186,8 @@ pub(crate) async fn process_file(
                 &analysis.face_observations,
             )
             .await;
+            crate::people::record_relation_observations(pg_client, analysis.asset_id, &analysis.relation_observations)
+                .await;
             Ok(analysis)
         }
         Err(e) => Err(e),

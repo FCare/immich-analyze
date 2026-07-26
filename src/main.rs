@@ -7,6 +7,7 @@ mod config;
 mod database;
 mod error;
 mod file_processing;
+mod http_server;
 mod llamacpp;
 mod monitor;
 mod ollama;
@@ -101,13 +102,62 @@ async fn run_combined_mode(
             println!("{}", rust_i18n::t!("main.batch_mode_completed"));
         })
     };
+    let trigger_handle = spawn_trigger_server(immich_root, &args, pg_client);
+
     println!(
         "{}",
         rust_i18n::t!("main.monitor_mode_started_in_background")
     );
     run_monitor_mode(immich_root, &args, pg_client, locale).await?;
     let _ = batch_handle.await;
+    if let Some(handle) = trigger_handle {
+        handle.abort();
+    }
     Ok(())
+}
+
+/// Starts the internal trigger HTTP server (see `http_server`) plus the task
+/// that runs `run_relations_feedback_loop` on demand each time it receives a
+/// /trigger request — so an external tool (e.g. the family-graph web UI, after
+/// a human edits a relation) can ask for the consequences to be propagated right
+/// away instead of waiting for this container's next restart. Returns None if
+/// disabled (`--http-trigger-port 0`).
+fn spawn_trigger_server(immich_root: &Path, args: &Args, pg_client: &Arc<PgClient>) -> Option<tokio::task::JoinHandle<()>> {
+    if args.http_trigger_port == 0 {
+        return None;
+    }
+    let immich_root = immich_root.to_path_buf();
+    let args = args.clone();
+    let pg_client = Arc::clone(pg_client);
+    let port = args.http_trigger_port;
+
+    Some(tokio::spawn(async move {
+        let trigger_state = Arc::new(http_server::TriggerState::default());
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        let server_handle = tokio::spawn(http_server::serve(port, Arc::clone(&trigger_state), tx));
+
+        let http_client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(args.timeout))
+            .build()
+        {
+            Ok(client) => client,
+            Err(e) => {
+                eprintln!("Failed to build HTTP client for trigger loop: {}", e);
+                return;
+            }
+        };
+
+        while rx.recv().await.is_some() {
+            if !trigger_state.try_start() {
+                continue;
+            }
+            println!("Trigger received: running relations feedback loop on demand.");
+            run_relations_feedback_loop(&immich_root, &args, &pg_client, &http_client).await;
+            trigger_state.finish();
+        }
+        let _ = server_handle.await;
+    }))
 }
 
 async fn run_monitor_mode(
@@ -156,95 +206,178 @@ async fn run_batch_mode(
             path = "Immich PostgreSQL database"
         )
     );
-    let preview_files = get_immich_preview_files(immich_root)?;
-    handle_no_files(&preview_files, args.ignore_existing, immich_root)?;
-    println!(
-        "{}",
-        rust_i18n::t!(
-            "main.images_to_process",
-            count = preview_files.len().to_string()
-        )
-    );
-    println!(
-        "{}",
-        rust_i18n::t!("main.model_name", name = args.model_name)
-    );
-    println!(
-        "{}",
-        rust_i18n::t!(
-            "main.max_concurrent",
-            count = args.max_concurrent.to_string()
-        )
-    );
-    println!(
-        "{}",
-        rust_i18n::t!("main.timeout", seconds = args.timeout.to_string())
-    );
-    if args.ignore_existing {
-        println!("{}", rust_i18n::t!("main.ignore_existing_enabled"));
-    }
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(args.timeout))
         .build()?;
-    let progress = Arc::new(tokio::sync::Mutex::new(SimpleProgress::new(
-        preview_files.len() as u64,
-        &rust_i18n::t!("progress.processing_complete"),
-    )));
-    let results = process_files_concurrently(
-        preview_files,
-        &http_client,
-        pg_client,
-        args,
-        locale,
-        progress,
-    )
-    .await;
-    file_processing::display_results(&results, args.max_concurrent > 1)?;
 
-    let changed_persons = match people::recompute_profiles(pg_client).await {
-        Ok(changed) => {
-            println!(
-                "{}",
-                rust_i18n::t!("main.profiles_recomputed", count = changed.len().to_string())
-            );
-            changed
+    if args.people_only {
+        println!("People-only mode: skipping image description generation");
+    } else {
+        let preview_files = get_immich_preview_files(immich_root)?;
+        handle_no_files(&preview_files, args.ignore_existing, immich_root)?;
+        println!(
+            "{}",
+            rust_i18n::t!(
+                "main.images_to_process",
+                count = preview_files.len().to_string()
+            )
+        );
+        println!(
+            "{}",
+            rust_i18n::t!("main.model_name", name = args.model_name)
+        );
+        println!(
+            "{}",
+            rust_i18n::t!(
+                "main.max_concurrent",
+                count = args.max_concurrent.to_string()
+            )
+        );
+        println!(
+            "{}",
+            rust_i18n::t!("main.timeout", seconds = args.timeout.to_string())
+        );
+        if args.ignore_existing {
+            println!("{}", rust_i18n::t!("main.ignore_existing_enabled"));
         }
-        Err(e) => {
-            eprintln!(
-                "{}",
-                rust_i18n::t!("error.profiles_recompute_failed", error = e.to_string())
-            );
-            Vec::new()
-        }
-    };
-    let changed_relation_pairs = match people::recompute_relations(pg_client).await {
-        Ok(changed) => {
-            println!(
-                "{}",
-                rust_i18n::t!("main.relations_recomputed", count = changed.len().to_string())
-            );
-            changed
-        }
-        Err(e) => {
-            eprintln!(
-                "{}",
-                rust_i18n::t!("error.relations_recompute_failed", error = e.to_string())
-            );
-            Vec::new()
-        }
-    };
-
-    let mut affected_persons: Vec<uuid::Uuid> = changed_persons;
-    for (a, b) in changed_relation_pairs {
-        affected_persons.push(a);
-        affected_persons.push(b);
+        let progress = Arc::new(tokio::sync::Mutex::new(SimpleProgress::new(
+            preview_files.len() as u64,
+            &rust_i18n::t!("progress.processing_complete"),
+        )));
+        let results = process_files_concurrently(
+            preview_files,
+            &http_client,
+            pg_client,
+            args,
+            locale,
+            progress,
+        )
+        .await;
+        file_processing::display_results(&results, args.max_concurrent > 1)?;
     }
-    affected_persons.sort();
-    affected_persons.dedup();
 
-    cascade_reprocess_affected_photos(&http_client, pg_client, immich_root, &affected_persons, args).await;
+    run_relations_feedback_loop(immich_root, args, pg_client, &http_client).await;
 
     Ok(())
+}
+
+/// Recompute knowledge -> reprocess the photos it affects -> those
+/// freshly-regenerated descriptions can themselves refine/confirm/refute other
+/// people's ages, relations or visual-relation hints -> recompute again. Capped
+/// at MAX_FEEDBACK_LOOP_ITERATIONS so a genuinely large, slowly-settling family
+/// graph can't turn into a runaway reprocessing loop; in practice it converges
+/// (affected_persons becomes empty) well before the cap in almost every run,
+/// since each pass only reacts to what the previous pass changed.
+///
+/// Called both at the end of a normal batch/combined run, and on-demand by the
+/// HTTP trigger server (see `http_server`) when e.g. a relation is edited through
+/// the companion web UI and needs its consequences propagated without waiting
+/// for the container's next restart.
+async fn run_relations_feedback_loop(immich_root: &Path, args: &Args, pg_client: &Arc<PgClient>, http_client: &reqwest::Client) {
+    const MAX_FEEDBACK_LOOP_ITERATIONS: usize = 5;
+
+    for iteration in 1..=MAX_FEEDBACK_LOOP_ITERATIONS {
+        if iteration > 1 {
+            println!("--- Feedback loop iteration {}/{} ---", iteration, MAX_FEEDBACK_LOOP_ITERATIONS);
+        }
+
+        let changed_persons = match people::recompute_profiles(pg_client).await {
+            Ok(changed) => {
+                println!(
+                    "{}",
+                    rust_i18n::t!("main.profiles_recomputed", count = changed.len().to_string())
+                );
+                changed
+            }
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    rust_i18n::t!("error.profiles_recompute_failed", error = e.to_string())
+                );
+                Vec::new()
+            }
+        };
+        let changed_relation_pairs = match people::recompute_relations(pg_client).await {
+            Ok(changed) => {
+                println!(
+                    "{}",
+                    rust_i18n::t!("main.relations_recomputed", count = changed.len().to_string())
+                );
+                changed
+            }
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    rust_i18n::t!("error.relations_recompute_failed", error = e.to_string())
+                );
+                Vec::new()
+            }
+        };
+
+        // Read-only: logs candidates for a human to review and, if confirmed, insert
+        // as a verified fact. Never mutates the database, so it never feeds the
+        // reprocessing cascade below.
+        match people::detect_relation_contradictions(pg_client).await {
+            Ok(contradictions) => println!("Relation contradictions detected (not auto-applied): {}", contradictions.len()),
+            Err(e) => eprintln!("Failed to detect relation contradictions: {}", e),
+        }
+
+        // Also read-only: relations the vision model itself claims to visually
+        // observe (see ###RELATION in the prompt), aggregated across photos.
+        match people::detect_visual_relation_hints(pg_client).await {
+            Ok(hints) => {
+                println!("Visual relation hints detected (not auto-applied): {}", hints.len());
+                for hint in &hints {
+                    println!(
+                        "  {} <-> {}: {} ({}/{} photos agree)",
+                        hint.person_a, hint.person_b, hint.relation_type, hint.agreement_count, hint.photo_count
+                    );
+                }
+            }
+            Err(e) => eprintln!("Failed to detect visual relation hints: {}", e),
+        }
+
+        let inferred_relation_pairs = match people::infer_derived_relations(pg_client).await {
+            Ok(touched) => {
+                println!("Inferred relations touched: {}", touched.len());
+                touched
+            }
+            Err(e) => {
+                eprintln!("Failed to infer derived relations: {}", e);
+                Vec::new()
+            }
+        };
+
+        let mut affected_persons: Vec<uuid::Uuid> = changed_persons;
+        for (a, b) in changed_relation_pairs.into_iter().chain(inferred_relation_pairs) {
+            affected_persons.push(a);
+            affected_persons.push(b);
+        }
+        affected_persons.sort();
+        affected_persons.dedup();
+
+        if affected_persons.is_empty() {
+            if iteration > 1 {
+                println!("Feedback loop converged after {} iteration(s): nothing left to refine.", iteration);
+            }
+            break;
+        }
+
+        let reprocessed_any =
+            cascade_reprocess_affected_photos(http_client, pg_client, immich_root, &affected_persons, args).await;
+        if !reprocessed_any {
+            // Either the bulk-change circuit breaker tripped, or there were simply
+            // no already-described photos to refresh — looping again would just
+            // repeat the same recompute for no new effect.
+            break;
+        }
+        if iteration == MAX_FEEDBACK_LOOP_ITERATIONS {
+            println!(
+                "Feedback loop hit the {}-iteration cap — stopping here even though more changes may remain.",
+                MAX_FEEDBACK_LOOP_ITERATIONS
+            );
+        }
+    }
 }
 
 /// Feedback loop: when a person's estimated age/relations changed materially,
@@ -256,15 +389,17 @@ async fn run_batch_mode(
 const MAX_CHANGED_PERSONS_FOR_CASCADE: usize = 20;
 const MAX_ASSETS_TO_REPROCESS_PER_RUN: i64 = 200;
 
+/// Returns true if at least one photo was actually reprocessed (used by the
+/// feedback loop above to decide whether looping again could possibly help).
 async fn cascade_reprocess_affected_photos(
     http_client: &reqwest::Client,
     pg_client: &Arc<PgClient>,
     immich_root: &Path,
     affected_persons: &[uuid::Uuid],
     args: &Args,
-) {
+) -> bool {
     if affected_persons.is_empty() {
-        return;
+        return false;
     }
     if affected_persons.len() > MAX_CHANGED_PERSONS_FOR_CASCADE {
         println!(
@@ -275,7 +410,7 @@ async fn cascade_reprocess_affected_photos(
                 threshold = MAX_CHANGED_PERSONS_FOR_CASCADE.to_string()
             )
         );
-        return;
+        return false;
     }
 
     let asset_ids = match people::find_reprocessable_assets(
@@ -291,11 +426,11 @@ async fn cascade_reprocess_affected_photos(
                 "{}",
                 rust_i18n::t!("error.cascade_lookup_failed", error = e.to_string())
             );
-            return;
+            return false;
         }
     };
     if asset_ids.is_empty() {
-        return;
+        return false;
     }
     println!(
         "{}",
@@ -337,4 +472,5 @@ async fn cascade_reprocess_affected_photos(
             failed = failed.to_string()
         )
     );
+    success > 0
 }

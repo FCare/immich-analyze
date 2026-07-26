@@ -217,7 +217,7 @@ pub async fn analyze_image(
                             debug!("Successfully parsed llamacpp response with {} choices", llamacpp_response.choices.len());
                             if let Some(choice) = llamacpp_response.choices.first() {
                                 let raw_content = choice.message.content.trim();
-                                let (description, face_observations) =
+                                let (description, face_observations, relation_observations) =
                                     crate::people::parse_response(raw_content, persons);
                                 if description.is_empty() {
                                     warn!("llamacpp returned empty content for image: {}", filename);
@@ -230,6 +230,7 @@ pub async fn analyze_image(
                                         description,
                                         asset_id,
                                         face_observations,
+                                        relation_observations,
                                     });
                                 }
                             } else {
@@ -253,7 +254,7 @@ pub async fn analyze_image(
                                             .and_then(|m| m.get("content"))
                                             .and_then(|c| c.as_str())
                                         {
-                                            let (description, face_observations) =
+                                            let (description, face_observations, relation_observations) =
                                                 crate::people::parse_response(content.trim(), persons);
                                             if !description.is_empty() {
                                                 info!("llamacpp analysis successful via fallback parsing for {}, description length: {}", filename, description.len());
@@ -261,6 +262,7 @@ pub async fn analyze_image(
                                                     description,
                                                     asset_id,
                                                     face_observations,
+                                                    relation_observations,
                                                 });
                                             }
                                         }

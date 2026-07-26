@@ -139,6 +139,8 @@ pub async fn process_new_file(
                 &analysis.face_observations,
             )
             .await;
+            crate::people::record_relation_observations(pg_client, analysis.asset_id, &analysis.relation_observations)
+                .await;
             println!(
                 "{}",
                 rust_i18n::t!("monitor.database_updated", filename = filename)
